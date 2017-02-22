@@ -1,0 +1,3 @@
+%{"gen_state_machine": {:hex, :gen_state_machine, "2.0.0", "f3bc7d961e4cd9f37944b379137e25fd063feffc42800bed69197fd1b78b3151", [:mix], []},
+  "libring": {:hex, :libring, "1.0.1", "bdf5fe67543b81048718bad10755ea17f9bdeda97f5485acc26ab0c495279bce", [:mix], []},
+  "swarm": {:hex, :swarm, "3.0.5", "c54ead44ca5f879959899f325f0e6b904e1a219faecb24ca4e55aad1fe38fecc", [:mix], [{:gen_state_machine, "~> 2.0", [hex: :gen_state_machine, optional: false]}, {:libring, "~> 1.0", [hex: :libring, optional: false]}]}}
