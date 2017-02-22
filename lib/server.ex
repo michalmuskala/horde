@@ -147,7 +147,7 @@ defmodule Horde.Server do
       :ok ->
         {:keep_state, %{data | version: version + 1}}
       :error ->
-        {:stop, :cant_save, data}
+        {:stop, :write_failed, data}
     end
   end
 
@@ -162,7 +162,7 @@ defmodule Horde.Server do
   defp handle_resp(other, data),
     do: {:stop, {:bad_return_value, other}, data}
 
-  defp persist_event(inner), do: {:next_event, :internal, {:persists, inner}}
+  defp persist_event(inner), do: {:next_event, :internal, {:persist, inner}}
 
   def code_change(old_vsn, state, %{mod: mod, id: id, inner: inner} = data, extra) do
     case mod.code_change(old_vsn, inner, extra) do

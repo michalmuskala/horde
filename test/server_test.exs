@@ -8,7 +8,7 @@ defmodule Horde.ServerTest do
     @behaviour Server
 
     def init(fun) when is_function(fun, 0), do: fun.()
-    def init(state), do: {:ok, state}
+    def init(state), do: {:ok, Storage.Ets, state}
 
     def loaded(data, fun), do: fun.(data)
 
@@ -29,6 +29,10 @@ defmodule Horde.ServerTest do
 
     def terminate({:shutdown, fun}, state), do: fun.(state)
     def terminate({:abnormal, fun}, state), do: fun.(state)
+  end
+
+  setup do
+    Storage.Ets.clean
   end
 
   describe "init/1" do
@@ -107,7 +111,291 @@ defmodule Horde.ServerTest do
       fun = fn -> {:load, Storage.Ets, fn _ -> {:stop, {:shutdown, shutdown}, 1} end} end
       assert {:ok, pid} = Server.start_link({EvalServer, fun})
       assert_receive {:terminate, 1}
-      assert_receive {:EXIT, _, {:shutdown, _}}
+      assert_receive {:EXIT, ^pid, {:shutdown, _}}
+    end
+  end
+
+  describe "handle_cast/2" do
+    test "{:noreply, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn n ->
+        send(parent, n)
+        {:noreply, n+1}
+      end
+      assert Server.cast(pid, fun) == :ok
+      assert_receive 1
+      assert Server.call(pid, :state) == 2
+    end
+
+    test "{:noreply, state, timeout}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        timeout = fn() ->
+          send(parent, {:timeout, n+1})
+          {:noreply, n+1}
+        end
+        send(parent, n)
+        {:noreply, timeout, 0}
+      end
+      Server.cast(pid, fun)
+      assert_receive 1
+      assert_receive {:timeout, 2}
+    end
+
+    test "{:noreply, state, :hibernate}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        send(parent, n)
+        {:noreply, n+1, :hibernate}
+      end
+      Server.cast(pid, fun)
+      assert_receive 1
+      assert_hibernated pid
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:persist, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        send(parent, n)
+        {:persist, n+1}
+      end
+      Server.cast(pid, fun)
+      assert_receive 1
+      assert Server.call(pid, :state) === 2
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+    end
+
+    test "{:stop, reason, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      _ = Process.flag(:trap_exit, true)
+      parent = self()
+      fun = fn(n) ->
+        terminate = fn(m) ->
+          send(parent, {:terminate, m})
+        end
+        send(parent, n)
+        {:stop, {:shutdown, terminate}, n+1}
+      end
+      Server.cast(pid, fun)
+      assert_receive 1
+      assert_receive {:terminate, 2}
+      assert_receive {:EXIT, ^pid, {:shutdown, _}}
+    end
+  end
+
+  describe "handle_info/2" do
+    test "{:noreply, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn n ->
+        send(parent, n)
+        {:noreply, n+1}
+      end
+      send(pid, fun)
+      assert_receive 1
+      assert Server.call(pid, :state) == 2
+    end
+
+    test "{:noreply, state, timeout}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        timeout = fn() ->
+          send(parent, {:timeout, n+1})
+          {:noreply, n+1}
+        end
+        send(parent, n)
+        {:noreply, timeout, 0}
+      end
+      send(pid, fun)
+      assert_receive 1
+      assert_receive {:timeout, 2}
+    end
+
+    test "{:noreply, state, :hibernate}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        send(parent, n)
+        {:noreply, n+1, :hibernate}
+      end
+      send(pid, fun)
+      assert_receive 1
+      assert_hibernated pid
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:persist, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        send(parent, n)
+        {:persist, n+1}
+      end
+      send(pid, fun)
+      assert_receive 1
+      assert Server.call(pid, :state) === 2
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+    end
+
+    test "{:stop, reason, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      _ = Process.flag(:trap_exit, true)
+      parent = self()
+      fun = fn(n) ->
+        terminate = fn(m) ->
+          send(parent, {:terminate, m})
+        end
+        send(parent, n)
+        {:stop, {:shutdown, terminate}, n+1}
+      end
+      send(pid, fun)
+      assert_receive 1
+      assert_receive {:terminate, 2}
+      assert_receive {:EXIT, ^pid, {:shutdown, _}}
+    end
+  end
+
+  describe "handle_call/3" do
+    test "{:reply, reply, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      fun = fn(_, n) -> {:reply, n, n+1} end
+      assert Server.call(pid, fun) === 1
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:persist, reply, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      fun = fn(_, n) -> {:persist, n, n+1} end
+      assert Server.call(pid, fun) === 1
+      assert Server.call(pid, :state) === 2
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+    end
+
+    test "{:reply, reply, state, timeout}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(_, n) ->
+        timeout = fn() ->
+          send(parent, {:timeout, n})
+          {:noreply, n+1}
+        end
+        {:reply, n, timeout, 0}
+      end
+      assert Server.call(pid, fun) === 1
+      assert_receive {:timeout, 1}
+    end
+
+    test "{:noreply, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      fun = fn(from, n) ->
+        Server.reply(from, n)
+        {:noreply, n+1}
+      end
+      assert Server.call(pid, fun) === 1
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:persist, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      fun = fn(from, n) ->
+        Server.reply(from, n)
+        {:persist, n+1}
+      end
+      assert Server.call(pid, fun) === 1
+      assert Server.call(pid, :state) === 2
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+    end
+
+    test "{:noreply, state, timeout}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+
+      fun = fn(from, n) ->
+        timeout = fn() ->
+          send(parent, {:timeout, n})
+          {:noreply, n+1}
+        end
+        Server.reply(from, n)
+        {:noreply, timeout, 0}
+      end
+      assert Server.call(pid, fun) === 1
+      assert_receive {:timeout, 1}
+    end
+
+    test "{:reply, reply, state, :hibernate}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      fun = fn(_, n) -> {:reply, n, n+1, :hibernate} end
+      assert Server.call(pid, fun) === 1
+      assert_hibernated pid
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:noreply, state, :hibernate}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      fun = fn(from, n) ->
+        Server.reply(from, n)
+        {:noreply, n+1, :hibernate}
+      end
+      assert Server.call(pid, fun) === 1
+      assert_hibernated pid
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:stop, reason, reply, state}" do
+      _ = Process.flag(:trap_exit, true)
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(_, n) ->
+        terminate = fn(m) ->
+          send(parent, {:terminate, m})
+        end
+        {:stop, {:shutdown, terminate}, n, n+1}
+      end
+      assert Server.call(pid, fun) === 1
+      assert_receive {:terminate, 2}
+      assert_receive {:EXIT, ^pid, {:shutdown, _}}
+    end
+
+    test "{:stop, reason, state}" do
+      _ = Process.flag(:trap_exit, true)
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(from, n) ->
+        terminate = fn(m) ->
+          send(parent, {:terminate, m})
+        end
+        Server.reply(from, n)
+        {:stop, {:shutdown, terminate}, n+1}
+      end
+      assert Server.call(pid, fun) === 1
+      assert_receive {:terminate, 2}
+      assert_receive {:EXIT, ^pid, {:shutdown, _}}
     end
   end
 
