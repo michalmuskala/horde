@@ -23,6 +23,11 @@ defmodule Horde.Server do
     {:noreply, new_state, timeout | :hibernate} |
     {:stop, reason :: term, new_state} when new_state: term
 
+  @callback reconcile(remote_state :: term, state :: term) ::
+    {:noreply | :persist, new_state} |
+    {:noreply, new_state, timeout | :hibernate} |
+    {:stop, reason :: term, new_state} when new_state: term
+
   @callback handle_call(request :: term, GenServer.from, state :: term) ::
     {:reply | :persist, reply, new_state} |
     {:reply, reply, new_state, timeout | :hibernate} |
@@ -111,6 +116,28 @@ defmodule Horde.Server do
     end
   end
 
+  ## Swarm handling
+
+  def loaded({:call, from}, {:swarm, :begin_handoff}, %{version: version, inner: inner}) do
+    {:keep_state_and_data, {:reply, from, {version, inner}}}
+  end
+
+  @reconcile [:end_handoff, :resolve_conflict]
+
+  def loaded(:cast, {:swarm, reconcile, {remote_version, _remote_inner}}, %{version: version})
+      when reconcile in @reconcile and remote_version <= version do
+    :keep_state_and_data
+  end
+
+  def loaded(:cast, {:swarm, reconcile, {remote_version, remote_inner}},
+      %{version: version, mod: mod, inner: inner} = data)
+      when reconcile in @reconcile do
+    version = max(version, remote_version)
+    handle_resp(mod.reconcile(remote_inner, inner), %{data | version: version})
+  end
+
+  ## Regular messages
+
   def loaded(:cast, event, %{mod: mod, inner: inner} = data) do
     handle_resp(mod.handle_cast(event, inner), data)
   end
@@ -129,8 +156,7 @@ defmodule Horde.Server do
         {:keep_state, %{data | inner: inner},
          [{:reply, from, reply}, persist_event(inner)]}
       {:persist, inner} ->
-        {:keep_state, %{data | inner: inner},
-         {:next_event, :internal, {:persist, inner}}}
+        {:keep_state, %{data | inner: inner}, persist_event(inner)}
       {:stop, reason, reply, inner} ->
         {:stop_and_reply, reason, {:reply, from, reply}, %{data | inner: inner}}
       other ->

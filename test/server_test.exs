@@ -20,6 +20,8 @@ defmodule Horde.ServerTest do
     def handle_info(:timeout, fun), do: fun.()
     def handle_info(fun, state), do: fun.(state)
 
+    def reconcile(remote, fun), do: fun.(remote)
+
     def format_status(_, [pdict, state]) do
       case Keyword.get(pdict, :format_status) do
         nil -> state
@@ -394,6 +396,126 @@ defmodule Horde.ServerTest do
         {:stop, {:shutdown, terminate}, n+1}
       end
       assert Server.call(pid, fun) === 1
+      assert_receive {:terminate, 2}
+      assert_receive {:EXIT, ^pid, {:shutdown, _}}
+    end
+  end
+
+  describe "reconcile/2" do
+    test "begin_handoff" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+      assert {0, 1} = Server.call(pid, {:swarm, :begin_handoff})
+    end
+
+    test "end_handoff remote < version" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+      fun = fn n -> {:persist, n + 1} end
+      assert :ok = Server.cast(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :end_handoff, {0, 1000}})
+      assert Server.call(pid, :state) == 2
+    end
+
+    test "resolve_conflict remote < version" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+      fun = fn n -> {:persist, n + 1} end
+      assert :ok = Server.cast(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {0, 1000}})
+      assert Server.call(pid, :state) == 2
+    end
+
+    test "{:noreply, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn n ->
+        reconcile = fn remote ->
+          send(parent, {:reconcile, remote})
+          {:noreply, n+1}
+        end
+        {:persist, reconcile}
+      end
+      send(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {3, 1000}})
+      assert_receive {:reconcile, 1000}
+      assert Server.call(pid, :state) == 2
+    end
+
+    test "{:noreply, state, timeout}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        timeout = fn() ->
+          send(parent, {:timeout, n+1})
+          {:noreply, n+1}
+        end
+        reconcile = fn remote ->
+          send(parent, {:reconcile, remote})
+          {:noreply, timeout, 0}
+        end
+        {:persist, reconcile}
+      end
+      send(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {3, 1000}})
+      assert_receive {:reconcile, 1000}
+      assert_receive {:timeout, 2}
+      assert Server.call(pid, :state) == 2
+    end
+
+    test "{:noreply, state, :hibernate}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        reconcile = fn remote ->
+          send(parent, {:reconcile, remote})
+          {:noreply, n+1, :hibernate}
+        end
+        {:persist, reconcile}
+      end
+      send(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {3, 1000}})
+      assert_receive {:reconcile, 1000}
+      assert_hibernated pid
+      assert Server.call(pid, :state) === 2
+    end
+
+    test "{:persist, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      parent = self()
+      fun = fn(n) ->
+        reconcile = fn remote ->
+          send(parent, {:reconcile, remote})
+          {:persist, n+1}
+        end
+        {:persist, reconcile}
+      end
+      send(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {3, 1000}})
+      assert_receive {:reconcile, 1000}
+      assert Server.call(pid, :state) === 2
+      assert {:ok, 4, 2} = Storage.Ets.load(EvalServer, 1)
+    end
+
+    test "{:stop, reason, state}" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      _ = Process.flag(:trap_exit, true)
+      parent = self()
+      fun = fn(n) ->
+        terminate = fn(m) ->
+          send(parent, {:terminate, m})
+        end
+        reconcile = fn remote ->
+          send(parent, {:reconcile, remote})
+          {:stop, {:shutdown, terminate}, n+1}
+        end
+        {:persist, reconcile}
+      end
+      send(pid, fun)
+      assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {3, 1000}})
+      assert_receive {:reconcile, 1000}
       assert_receive {:terminate, 2}
       assert_receive {:EXIT, ^pid, {:shutdown, _}}
     end
