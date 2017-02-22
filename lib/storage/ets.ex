@@ -8,7 +8,7 @@ defmodule Horde.Storage.Ets do
   def load(module, id) do
     case :ets.match(__MODULE__, {{module, id, :"$1"}, :"$2"}) do
       [] ->
-        nil
+        {:ok, 0, nil}
       results ->
         [version, data] = Enum.max_by(results, &hd/1)
         {:ok, version, data}

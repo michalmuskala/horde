@@ -5,6 +5,6 @@ defmodule Storage do
   @type version :: pos_integer
   @type id :: binary
 
-  @callback load(module, id) :: {:ok, version, data} | nil | :error
+  @callback load(module, id) :: {:ok, version, data} | :error
   @callback write(module, id, version, data) :: :ok | :error
 end

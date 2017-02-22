@@ -1,13 +1,15 @@
 defmodule Horde.Server do
-  @callback init(id :: binary) ::
+  @callback init(id :: term) ::
+    {:ok, Storage.t, state} |
+    {:ok, Storage.t, state, timeout | :hibernate} |
     {:load, Storage.t, state} |
     :ignore |
     {:stop, reason :: any} when state: any
 
-  @callback loaded(data :: any, state) ::
-    {:ok, state} |
-    {:ok, state, timeout | :hibernate} |
-    {:stop, reason :: any} when state: any
+  @callback loaded(data :: any, state :: term) ::
+    {:ok, new_state} |
+    {:ok, new_state, timeout | :hibernate} |
+    {:stop, reason :: any, new_state} when new_state: term
 
   @callback terminate(reason, state :: term) :: term when reason: :normal | :shutdown | {:shutdown, term} | term
 
@@ -21,13 +23,13 @@ defmodule Horde.Server do
     {:noreply, new_state, timeout | :hibernate} |
     {:stop, reason :: term, new_state} when new_state: term
 
-  # @callback handle_call(request :: term, GenServer.from, state :: term) ::
-  #   {:reply | :persist, reply, new_state} |
-  #   {:reply, reply, new_state, timeout | :hibernate}
-  #   # {:noreply | :persist, new_state} |
-  #   {:noreply, new_state, timeout | :hibernate}
-  #   {:stop, reason, reply, new_state} |
-  #   {:stop, reason, new_state} when reply: term, new_state: term, reason: term
+  @callback handle_call(request :: term, GenServer.from, state :: term) ::
+    {:reply | :persist, reply, new_state} |
+    {:reply, reply, new_state, timeout | :hibernate} |
+    {:noreply | :persist, new_state} |
+    {:noreply, new_state, timeout | :hibernate} |
+    {:stop, reason, reply, new_state} |
+    {:stop, reason, new_state} when reply: term, new_state: term, reason: term
 
   @callback format_status(reason, pdict_and_state :: list) :: term when reason: :normal | :terminate
   @optional_callbacks [format_status: 2]
@@ -43,18 +45,24 @@ defmodule Horde.Server do
     :gen_statem.start_link(__MODULE__, {module, id}, opts)
   end
 
-  def ping({module, id}) do
-    with {:ok, pid} <- lookup(module, id) do
-      :gen_statem.call(pid, :ping, {:dirty_timeout, 5_000})
-    end
+  def call(name, msg, timeout \\ 5_000) do
+    :gen_statem.call(whereis(name), msg, {:dirty_timeout, timeout})
   end
 
-  defp lookup(module, id) do
-    name = {module, id}
+  def cast(name, msg) do
+    :gen_statem.cast(whereis(name), msg)
+  end
+
+  def reply(from, reply) do
+    :gen_statem.reply(from, reply)
+  end
+
+  defp whereis(pid) when is_pid(pid), do: pid
+  defp whereis({_module, _id} = name) do
     case Swarm.register_name(name, Horde.Supervisor, :register, [name]) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, {:already_registered, pid}} -> {:ok, pid}
-      error -> error
+      {:ok, pid} -> pid
+      {:error, {:already_registered, pid}} -> pid
+      _error -> nil
     end
   end
 
@@ -62,8 +70,15 @@ defmodule Horde.Server do
 
   def callback_mode, do: :state_functions
 
-  def init({id, module}) do
+  def init({module, id}) do
+    Process.put(:"$initial_call", {module, :init, 1})
     case module.init(id) do
+      {:ok, storage, inner} ->
+        data = %{mod: module, id: id, storage: storage, inner: inner, version: 0}
+        {:ok, :loaded, data}
+      {:ok, storage, inner, timeout} ->
+        data = %{mod: module, id: id, storage: storage, inner: inner, version: 0}
+        {:ok, :loaded, data, map_timeout(timeout)}
       {:load, storage, inner} ->
         data = %{mod: module, id: id, storage: storage, inner: inner}
         {:ok, :loading, data, {:next_event, :internal, :load}}
@@ -72,7 +87,7 @@ defmodule Horde.Server do
       {:stop, reason} ->
         {:stop, reason}
       other ->
-        {:stop, {:bad_return, other}}
+        {:stop, {:bad_return_value, other}}
     end
   end
 
@@ -86,8 +101,10 @@ defmodule Horde.Server do
           {:ok, inner, timeout} ->
             data = Map.merge(data, %{inner: inner, version: version})
             {:next_state, :loaded, data, map_timeout(timeout)}
-          {:stop, reason} ->
-            {:stop, reason}
+          {:stop, reason, inner} ->
+            {:stop, reason, %{data | inner: inner}}
+          other ->
+            {:stop, {:bad_return_value, other}, data}
         end
       :error ->
         {:stop, :not_loaded}
@@ -143,7 +160,7 @@ defmodule Horde.Server do
   defp handle_resp({:stop, reason, inner}, data),
     do: {:stop, reason, %{data | inner: inner}}
   defp handle_resp(other, data),
-    do: {:stop, {:bad_return, other}, data}
+    do: {:stop, {:bad_return_value, other}, data}
 
   defp persist_event(inner), do: {:next_event, :internal, {:persists, inner}}
 
@@ -161,8 +178,10 @@ defmodule Horde.Server do
               {:ok, state, _timeout} ->
                 data = Map.merge(data, %{inner: inner, version: version})
                 {:ok, state, data}
-              {:stop, reason} ->
+              {:stop, reason, _inner} ->
                 {:error, reason}
+              other ->
+                {:error, {:bad_return_value, other}}
             end
           :error ->
             {:error, :not_loaded}
