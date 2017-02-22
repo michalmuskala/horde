@@ -98,7 +98,7 @@ defmodule Horde.Server do
   end
 
   def loading(:internal, :load, %{storage: storage, id: id, mod: mod, inner: inner} = data) do
-    case storage.load(mod, id) do
+    case storage.load(mod, id, inner) do
       {:ok, version, loaded} ->
         case mod.loaded(loaded, inner) do
           {:ok, inner} ->
@@ -160,7 +160,7 @@ defmodule Horde.Server do
         {:keep_state, %{data | inner: inner}, [{:reply, from, reply}, map_timeout(timeout)]}
       {:persist, reply, inner} ->
         {:keep_state, %{data | inner: inner},
-         [{:reply, from, reply}, persist_event(inner)]}
+         [persist_event(inner), {:reply, from, reply}]}
       {:persist, inner} ->
         {:keep_state, %{data | inner: inner}, persist_event(inner)}
       {:stop, reason, reply, inner} ->
@@ -175,9 +175,9 @@ defmodule Horde.Server do
   end
 
   def loaded(:internal, {:persist, inner}, %{storage: storage, mod: mod, id: id, version: version} = data) do
-    case storage.write(mod, id, version + 1, inner) do
-      :ok ->
-        {:keep_state, %{data | version: version + 1}}
+    case storage.write(mod, id, version, inner) do
+      {:ok, version, inner} ->
+        {:keep_state, %{data | version: version, inner: inner}}
       :error ->
         {:stop, :write_failed, data}
     end

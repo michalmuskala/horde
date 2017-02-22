@@ -5,10 +5,10 @@ defmodule Horde.Storage.Ets do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
   end
 
-  def load(module, id) do
+  def load(module, id, data) do
     case :ets.match(__MODULE__, {{module, id, :"$1"}, :"$2"}) do
       [] ->
-        {:ok, 0, nil}
+        {:ok, 0, data}
       results ->
         [version, data] = Enum.max_by(results, &hd/1)
         {:ok, version, data}
@@ -35,11 +35,9 @@ defmodule Horde.Storage.Ets do
   end
 
   def handle_call({:write, module, id, version, data}, _from, state) do
-    case load(module, id) do
-      {:ok, loaded_version, _data} when loaded_version < version ->
-        insert_new(module, id, version, data, state)
-      nil ->
-        insert_new(module, id, version, data, state)
+    case load(module, id, data) do
+      {:ok, loaded_version, _data} when loaded_version < version + 1 ->
+        insert_new(module, id, version + 1, data, state)
       _other ->
         {:reply, :error, state}
     end
@@ -52,7 +50,7 @@ defmodule Horde.Storage.Ets do
                [{:"=:=", {:const, module}, :"$2"}, {:"=:=", {:const, id}, :"$1"}],
                [{:<, :"$3", version}]}]
         :ets.match_delete(__MODULE__, ms)
-        {:reply, :ok, state}
+        {:reply, {:ok, version, data}, state}
       false ->
         {:reply, :error, state}
     end

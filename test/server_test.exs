@@ -82,7 +82,7 @@ defmodule Horde.ServerTest do
 
   describe "loaded/2" do
     test "{:ok, state}" do
-      fun = fn -> {:load, Storage.Ets, fn nil -> {:ok, 1} end} end
+      fun = fn -> {:load, Storage.Ets, fn _ -> {:ok, 1} end} end
       assert {:ok, pid} = Server.start_link({EvalServer, fun})
       assert Server.call(pid, :state) == 1
     end
@@ -174,7 +174,7 @@ defmodule Horde.ServerTest do
       Server.cast(pid, fun)
       assert_receive 1
       assert Server.call(pid, :state) === 2
-      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1, :foo)
     end
 
     test "{:stop, reason, state}" do
@@ -252,7 +252,7 @@ defmodule Horde.ServerTest do
       send(pid, fun)
       assert_receive 1
       assert Server.call(pid, :state) === 2
-      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1, :foo)
     end
 
     test "{:stop, reason, state}" do
@@ -289,7 +289,7 @@ defmodule Horde.ServerTest do
       fun = fn(_, n) -> {:persist, n, n+1} end
       assert Server.call(pid, fun) === 1
       assert Server.call(pid, :state) === 2
-      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1, :foo)
     end
 
     test "{:reply, reply, state, timeout}" do
@@ -327,7 +327,7 @@ defmodule Horde.ServerTest do
       end
       assert Server.call(pid, fun) === 1
       assert Server.call(pid, :state) === 2
-      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1)
+      assert {:ok, 1, 2} = Storage.Ets.load(EvalServer, 1, :foo)
     end
 
     test "{:noreply, state, timeout}" do
@@ -496,7 +496,7 @@ defmodule Horde.ServerTest do
       assert :ok = Server.cast(pid, {:swarm, :resolve_conflict, {3, 1000}})
       assert_receive {:reconcile, 1000}
       assert Server.call(pid, :state) === 2
-      assert {:ok, 4, 2} = Storage.Ets.load(EvalServer, 1)
+      assert {:ok, 4, 2} = Storage.Ets.load(EvalServer, 1, :foo)
     end
 
     test "{:stop, reason, state}" do

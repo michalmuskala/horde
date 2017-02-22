@@ -1,10 +1,10 @@
 defmodule Storage do
   @type t :: module
 
-  @type data :: any
-  @type version :: pos_integer
-  @type id :: binary
+  @type id :: term
 
-  @callback load(module, id) :: {:ok, version, data} | :error
-  @callback write(module, id, version, data) :: :ok | :error
+  @callback load(module, id, data :: term) ::
+    {:ok, next_version :: pos_integer, new_data :: term} | :error
+  @callback write(module, id, version :: integer, data :: term) ::
+    {:ok, next_version :: pos_integer, new_data :: term} | :error
 end
