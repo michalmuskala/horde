@@ -62,8 +62,8 @@ defmodule Horde.Server do
     :gen_statem.reply(from, reply)
   end
 
-  defp whereis(pid) when is_pid(pid), do: pid
-  defp whereis({_module, _id} = name) do
+  def whereis(pid) when is_pid(pid), do: pid
+  def whereis({_module, _id} = name) do
     case Swarm.register_name(name, Horde.Supervisor, :register, [name]) do
       {:ok, pid} -> pid
       {:error, {:already_registered, pid}} -> pid
