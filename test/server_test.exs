@@ -29,6 +29,7 @@ defmodule Horde.ServerTest do
       end
     end
 
+    def terminate(:handoff, state), do: state.()
     def terminate({:shutdown, fun}, state), do: fun.(state)
     def terminate({:abnormal, fun}, state), do: fun.(state)
   end
@@ -518,6 +519,25 @@ defmodule Horde.ServerTest do
       assert_receive {:reconcile, 1000}
       assert_receive {:terminate, 2}
       assert_receive {:EXIT, ^pid, {:shutdown, _}}
+    end
+  end
+
+  describe "terminate/2" do
+    test "when handing off" do
+      {:ok, pid} = Server.start_link({EvalServer, 1})
+
+      _ = Process.flag(:trap_exit, true)
+      parent = self()
+      fun = fn(n) ->
+        terminate = fn ->
+          send(parent, {:terminate, n})
+        end
+        {:noreply, terminate}
+      end
+      send(pid, fun)
+      send(pid, {:swarm, :die})
+      assert_receive {:terminate, 1}
+      assert_receive {:EXIT, ^pid, {:shutdown, :handoff}}
     end
   end
 

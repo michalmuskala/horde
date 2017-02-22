@@ -11,7 +11,8 @@ defmodule Horde.Server do
     {:ok, new_state, timeout | :hibernate} |
     {:stop, reason :: any, new_state} when new_state: term
 
-  @callback terminate(reason, state :: term) :: term when reason: :normal | :shutdown | {:shutdown, term} | term
+  @callback terminate(reason, state :: term) :: term
+    when reason: :handoff | :normal | :shutdown | {:shutdown, term} | term
 
   @callback handle_cast(request :: term, state :: term) ::
     {:noreply | :persist, new_state} |
@@ -136,6 +137,11 @@ defmodule Horde.Server do
     handle_resp(mod.reconcile(remote_inner, inner), %{data | version: version})
   end
 
+  def loaded(:info, {:swarm, :die}, %{mod: mod, id: id, inner: inner}) do
+    mod.terminate(:handoff, inner)
+    {:next_state, :unloaded, %{mod: mod, id: id}, {:next_event, :internal, :handoff}}
+  end
+
   ## Regular messages
 
   def loaded(:cast, event, %{mod: mod, inner: inner} = data) do
@@ -175,6 +181,10 @@ defmodule Horde.Server do
       :error ->
         {:stop, :write_failed, data}
     end
+  end
+
+  def unloaded(:internal, :handoff, data) do
+    {:stop, {:shutdown, :handoff}, data}
   end
 
   defp handle_resp({:noreply, inner}, data),
@@ -217,7 +227,9 @@ defmodule Horde.Server do
     end
   end
 
-  def format_status(:normal, [pdict, _state, %{mod: mod, inner: inner}]) do
+  @user_states [:loaded, :loading]
+
+  def format_status(:normal, [pdict, state, %{mod: mod, inner: inner}]) when state in @user_states do
     try do
       apply(mod, :format_status, [:normal, [pdict, inner]])
     catch
@@ -228,7 +240,7 @@ defmodule Horde.Server do
         mod_status
     end
   end
-  def format_status(:terminate, [pdict, _state, %{mod: mod, inner: inner}]) do
+  def format_status(:terminate, [pdict, state, %{mod: mod, inner: inner}]) when state in @user_states do
     try do
       apply(mod, :format_status, [:terminate, [pdict, inner]])
     catch
@@ -239,9 +251,21 @@ defmodule Horde.Server do
         mod_state
     end
   end
+  # User state is not present, there's no point in calling user's formatting
+  def format_status(:normal, [_pdict, state, data]) do
+    [{:data, [{'State', {state, data}}]}]
+  end
+  def format_status(:terminate, [_pdict, state, data]) do
+    {state, data}
+  end
 
-  def terminate(reason, _state, %{mod: mod, inner: inner}) do
+  def terminate(reason, state, %{mod: mod, inner: inner}) when state in @user_states do
     mod.terminate(reason, inner)
+  end
+  def terminate(_reason, _state, _data) do
+    # User-facing terminations are only happening in loaded state,
+    # in other states we should have already performed the clenup
+    :ok
   end
 
   defp map_timeout(:hibernate), do: :hibernate
